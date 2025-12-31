@@ -1,0 +1,46 @@
+{
+  "name": "tuanta1992/laravel-vnpay-payment",
+  "description": "VNPay payment gateway integration for Laravel",
+  "keywords": [
+    "laravel",
+    "vnpay",
+    "payment",
+    "gateway",
+    "ecommerce"
+  ],
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Trần Anh Tuấn",
+      "email": "tuanta.fullstackdev@gmail.com"
+    }
+  ],
+  "require": {
+    "php": ">=8.0",
+    "illuminate/support": "^10.0|^11.0|^12.0",
+    "illuminate/http": "^10.0|^11.0|^12.0",
+    "illuminate/routing": "^10.0|^11.0|^12.0"
+  },
+  "require-dev": {
+    "orchestra/testbench": "^8.0|^9.0|^10.0",
+    "phpunit/phpunit": "^10.0|^11.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "VNPayPayment\\": "src/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "VNPayPayment\\VNPayServiceProvider"
+      ],
+      "aliases": {
+        "VNPay": "VNPayPayment\\Facades\\VNPay"
+      }
+    }
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true
+}
