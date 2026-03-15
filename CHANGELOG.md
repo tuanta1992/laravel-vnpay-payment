@@ -24,7 +24,7 @@ All notable changes to `laravel-vnpay-payment` will be documented in this file.
 - Bank code mapping
 - Response code mapping
 - Transaction status mapping
-- Configurable environment (sandbox/production)
+- Configurable environment (sandbox/live)
 - Customizable timeout
 - IP address detection
 - Date/time formatting helpers

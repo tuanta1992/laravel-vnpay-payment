@@ -4,6 +4,9 @@ namespace VNPayPayment\Api;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
+use VNPayPayment\VNPayConstants;
+use VNPayPayment\Exceptions\VNPayValidationException;
+use VNPayPayment\Exceptions\VNPayRequestException;
 
 class RefundTransaction extends BaseApi
 {
@@ -12,7 +15,8 @@ class RefundTransaction extends BaseApi
      *
      * @param array $params
      * @return array
-     * @throws \Exception
+     * @throws VNPayValidationException
+     * @throws VNPayRequestException
      */
     public function execute(array $params): array
     {
@@ -46,7 +50,14 @@ class RefundTransaction extends BaseApi
             return $this->parseResponse($result);
 
         } catch (GuzzleException $e) {
-            throw new \Exception('Refund transaction failed: ' . $e->getMessage());
+            throw new VNPayRequestException(
+                'Refund transaction request failed: ' . $e->getMessage(),
+                url: $this->getUrl('api'),
+                method: 'POST',
+                attempts: 1,
+                context: ['txn_ref' => $requestData['vnp_TxnRef'] ?? ''],
+                previous: $e
+            );
         }
     }
 
@@ -58,30 +69,64 @@ class RefundTransaction extends BaseApi
      */
     protected function buildRequestData(array $params): array
     {
-        $requestId = $params['request_id'] ?? $this->generateTxnRef(32);
+        // Normalize dual-mode parameters: vnp_ prefix takes priority
+        $normalized = $this->normalizeParams($params, [
+            'vnp_TxnRef' => 'txn_ref',
+            'vnp_TransactionDate' => 'transaction_date',
+            'vnp_TransactionType' => 'transaction_type',
+            'vnp_CreateBy' => 'create_by',
+            'vnp_OrderInfo' => 'order_info',
+            'vnp_TransactionNo' => 'transaction_no',
+            'vnp_RequestId' => 'request_id',
+            'vnp_IpAddr' => 'ip_addr',
+        ]);
+
+        // Extract required parameters
+        $txnRef = $normalized['vnp_TxnRef'] ?? null;
+        $transactionDate = $normalized['vnp_TransactionDate'] ?? null;
+        $transactionType = $normalized['vnp_TransactionType'] ?? null;
+        $createBy = $normalized['vnp_CreateBy'] ?? null;
+        $orderInfo = $normalized['vnp_OrderInfo'] ?? VNPayConstants::DEFAULT_REFUND_ORDER_INFO;
+
+        // Amount handling: vnp_ prefix = no format, simple = apply format
+        if (isset($params['vnp_Amount'])) {
+            $amount = $params['vnp_Amount']; // Use as-is (pre-formatted)
+        } elseif (isset($params['amount'])) {
+            $amount = $this->formatAmount($params['amount']); // Apply *100
+        } else {
+            throw new VNPayValidationException('amount', 'Missing required parameter: amount or vnp_Amount');
+        }
+
+        // Extract optional parameters with defaults
+        $transactionNo = $normalized['vnp_TransactionNo'] ?? VNPayConstants::DEFAULT_TRANSACTION_NO;
+        $requestId = $normalized['vnp_RequestId'] ?? $this->generateTxnRef(VNPayConstants::DEFAULT_REQUEST_ID_LENGTH);
+        $ipAddr = $normalized['vnp_IpAddr'] ?? $this->getIpAddress();
+
+        if (!$txnRef || !$transactionDate || !$transactionType || !$createBy) {
+            throw new VNPayValidationException(
+                'txn_ref|transaction_date|transaction_type|create_by',
+                'Missing required parameters: txn_ref/vnp_TxnRef, transaction_date/vnp_TransactionDate, ' .
+                'transaction_type/vnp_TransactionType, create_by/vnp_CreateBy'
+            );
+        }
+
         $createDate = $this->formatDateTime();
 
         $data = [
             'vnp_RequestId' => $requestId,
             'vnp_Version' => $this->config['version'],
-            'vnp_Command' => 'refund',
+            'vnp_Command' => VNPayConstants::COMMAND_REFUND,
             'vnp_TmnCode' => $this->config['tmn_code'],
-            'vnp_TransactionType' => $params['transaction_type'], // 02: full, 03: partial
-            'vnp_TxnRef' => $params['txn_ref'],
-            'vnp_Amount' => $this->formatAmount($params['amount']),
-            'vnp_OrderInfo' => $params['order_info'] ?? 'Refund transaction',
-            'vnp_TransactionDate' => $params['transaction_date'],
-            'vnp_CreateBy' => $params['create_by'],
+            'vnp_TransactionType' => $transactionType, // TRANSACTION_TYPE_FULL_REFUND or TRANSACTION_TYPE_PARTIAL_REFUND
+            'vnp_TxnRef' => $txnRef,
+            'vnp_Amount' => $amount,
+            'vnp_OrderInfo' => $this->removeAccents($orderInfo),
+            'vnp_TransactionDate' => $transactionDate,
+            'vnp_CreateBy' => $createBy,
             'vnp_CreateDate' => $createDate,
-            'vnp_IpAddr' => $params['ip_addr'] ?? $this->getIpAddress(),
+            'vnp_IpAddr' => $ipAddr,
+            'vnp_TransactionNo' => $transactionNo,
         ];
-
-        // Optional: transaction_no
-        if (!empty($params['transaction_no'])) {
-            $data['vnp_TransactionNo'] = $params['transaction_no'];
-        } else {
-            $data['vnp_TransactionNo'] = '0';
-        }
 
         // Create secure hash
         $hashData = sprintf(
@@ -106,6 +151,7 @@ class RefundTransaction extends BaseApi
         return $data;
     }
 
+
     /**
      * Parse response
      *
@@ -128,7 +174,7 @@ class RefundTransaction extends BaseApi
             'transaction_no' => $result['vnp_TransactionNo'] ?? '',
             'transaction_type' => $result['vnp_TransactionType'] ?? '',
             'transaction_status' => $result['vnp_TransactionStatus'] ?? '',
-            'is_success' => ($result['vnp_ResponseCode'] ?? '') === '00',
+            'is_success' => ($result['vnp_ResponseCode'] ?? '') === VNPayConstants::RESPONSE_SUCCESS,
             'raw_data' => $result,
         ];
     }

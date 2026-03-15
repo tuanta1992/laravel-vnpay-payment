@@ -2,6 +2,8 @@
 
 namespace VNPayPayment\Api;
 
+use VNPayPayment\VNPayConstants;
+
 class CreatePayment extends BaseApi
 {
     /**
@@ -12,11 +14,20 @@ class CreatePayment extends BaseApi
      */
     public function execute(array $params): string
     {
-        // Validate required params
-        $this->validateRequired($params, ['amount', 'order_info', 'txn_ref']);
+        // Detect mode: direct VNPay parameters or abstracted keys
+        $isDirect = isset($params['vnp_TxnRef']) || isset($params['vnp_Amount']) || isset($params['vnp_OrderInfo']);
+
+        if ($isDirect) {
+            // Validate direct VNPay parameters
+            $this->validateVnpParams($params, ['vnp_TxnRef', 'vnp_Amount', 'vnp_OrderInfo']);
+            $this->validateVnpAmount($params['vnp_Amount']);
+        } else {
+            // Validate abstracted parameters
+            $this->validateRequired($params, ['amount', 'order_info', 'txn_ref']);
+        }
 
         // Build input data
-        $inputData = $this->buildInputData($params);
+        $inputData = $this->buildInputData($params, $isDirect);
 
         // Create query string
         $query = $this->buildQueryString($inputData);
@@ -34,12 +45,71 @@ class CreatePayment extends BaseApi
     }
 
     /**
-     * Build input data
+     * Build input data - dispatcher method
+     *
+     * @param array $params
+     * @param bool $isDirect
+     * @return array
+     */
+    protected function buildInputData(array $params, bool $isDirect = false): array
+    {
+        if ($isDirect) {
+            return $this->buildDirectInputData($params);
+        } else {
+            return $this->buildAbstractedInputData($params);
+        }
+    }
+
+    /**
+     * Build input data - direct VNPay parameters mode
      *
      * @param array $params
      * @return array
      */
-    protected function buildInputData(array $params): array
+    protected function buildDirectInputData(array $params): array
+    {
+        $createDate = $this->formatDateTime();
+        $expireDate = $this->formatDateTime(
+            now()->addMinutes($this->config['expire_time'] ?? 15)
+        );
+
+        // Build base input data with direct VNPay parameters (NO formatting on amount)
+        $inputData = [
+            'vnp_Version' => $this->config['version'],
+            'vnp_Command' => VNPayConstants::COMMAND_PAY,
+            'vnp_TmnCode' => $this->config['tmn_code'],
+            'vnp_Amount' => $params['vnp_Amount'], // NO *100 formatting
+            'vnp_CurrCode' => $params['vnp_CurrCode'] ?? $this->config['defaults']['currency'] ?? VNPayConstants::CURRENCY_VND,
+            'vnp_TxnRef' => $params['vnp_TxnRef'],
+            'vnp_OrderInfo' => $this->truncateOrderInfo($this->removeAccents($params['vnp_OrderInfo'])), // Remove accents + truncate to 255 chars
+            'vnp_OrderType' => $params['vnp_OrderType'] ?? $this->config['defaults']['order_type'] ?? VNPayConstants::ORDER_TYPE_OTHER,
+            'vnp_Locale' => $params['vnp_Locale'] ?? $this->config['defaults']['locale'] ?? VNPayConstants::LOCALE_VIETNAMESE,
+            'vnp_ReturnUrl' => $params['vnp_ReturnUrl'] ?? $this->config['return_url'],
+            'vnp_IpAddr' => $params['vnp_IpAddr'] ?? $this->getIpAddress(),
+            'vnp_CreateDate' => $createDate,
+            'vnp_ExpireDate' => $expireDate,
+        ];
+
+        // Optional fields: billing, invoice info, bank code
+        $optionalFields = [
+            'vnp_BankCode',
+            'vnp_Bill_Mobile', 'vnp_Bill_Email', 'vnp_Bill_FirstName',
+            'vnp_Bill_LastName', 'vnp_Bill_Address', 'vnp_Bill_City',
+            'vnp_Bill_Country', 'vnp_Bill_State',
+            'vnp_Inv_Phone', 'vnp_Inv_Email', 'vnp_Inv_Customer',
+            'vnp_Inv_Address', 'vnp_Inv_Company', 'vnp_Inv_Taxcode', 'vnp_Inv_Type'
+        ];
+
+        return $this->applyOptionalFields($inputData, $params, $optionalFields);
+    }
+
+    /**
+     * Build input data - abstracted parameters mode (legacy)
+     *
+     * @param array $params
+     * @return array
+     */
+    protected function buildAbstractedInputData(array $params): array
     {
         $createDate = $this->formatDateTime();
         $expireDate = $this->formatDateTime(
@@ -48,116 +118,46 @@ class CreatePayment extends BaseApi
 
         $inputData = [
             'vnp_Version' => $this->config['version'],
-            'vnp_Command' => 'pay',
+            'vnp_Command' => VNPayConstants::COMMAND_PAY,
             'vnp_TmnCode' => $this->config['tmn_code'],
-            'vnp_Amount' => $this->formatAmount($params['amount']),
-            'vnp_CurrCode' => $params['currency'] ?? $this->config['defaults']['currency'],
+            'vnp_Amount' => $this->formatAmount($params['amount']), // Apply *100
+            'vnp_CurrCode' => $params['currency'] ?? $this->config['defaults']['currency'] ?? VNPayConstants::CURRENCY_VND,
             'vnp_TxnRef' => $params['txn_ref'],
-            'vnp_OrderInfo' => $this->removeAccents($params['order_info']),
-            'vnp_OrderType' => $params['order_type'] ?? $this->config['defaults']['order_type'],
-            'vnp_Locale' => $params['locale'] ?? $this->config['defaults']['locale'],
+            'vnp_OrderInfo' => $this->truncateOrderInfo($this->removeAccents($params['order_info'])), // Remove accents + truncate to 255 chars
+            'vnp_OrderType' => $params['order_type'] ?? $this->config['defaults']['order_type'] ?? VNPayConstants::ORDER_TYPE_OTHER,
+            'vnp_Locale' => $params['locale'] ?? $this->config['defaults']['locale'] ?? VNPayConstants::LOCALE_VIETNAMESE,
             'vnp_ReturnUrl' => $params['return_url'] ?? $this->config['return_url'],
             'vnp_IpAddr' => $params['ip_addr'] ?? $this->getIpAddress(),
             'vnp_CreateDate' => $createDate,
             'vnp_ExpireDate' => $expireDate,
         ];
 
-        // Optional: Bank code
-        if (!empty($params['bank_code'])) {
-            $inputData['vnp_BankCode'] = $params['bank_code'];
-        }
+        // Map abstracted optional fields to VNPay format and apply them
+        $abstractedOptionalFields = [
+            'bank_code' => 'vnp_BankCode',
+            'bill_mobile' => 'vnp_Bill_Mobile',
+            'bill_email' => 'vnp_Bill_Email',
+            'bill_first_name' => 'vnp_Bill_FirstName',
+            'bill_last_name' => 'vnp_Bill_LastName',
+            'bill_address' => 'vnp_Bill_Address',
+            'bill_city' => 'vnp_Bill_City',
+            'bill_country' => 'vnp_Bill_Country',
+            'inv_phone' => 'vnp_Inv_Phone',
+            'inv_email' => 'vnp_Inv_Email',
+            'inv_customer' => 'vnp_Inv_Customer',
+            'inv_address' => 'vnp_Inv_Address',
+            'inv_company' => 'vnp_Inv_Company',
+            'inv_taxcode' => 'vnp_Inv_Taxcode',
+            'inv_type' => 'vnp_Inv_Type'
+        ];
 
-        // Optional: Bill info
-        if (!empty($params['bill_mobile'])) {
-            $inputData['vnp_Bill_Mobile'] = $params['bill_mobile'];
-        }
-        if (!empty($params['bill_email'])) {
-            $inputData['vnp_Bill_Email'] = $params['bill_email'];
-        }
-        if (!empty($params['bill_first_name'])) {
-            $inputData['vnp_Bill_FirstName'] = $params['bill_first_name'];
-        }
-        if (!empty($params['bill_last_name'])) {
-            $inputData['vnp_Bill_LastName'] = $params['bill_last_name'];
-        }
-        if (!empty($params['bill_address'])) {
-            $inputData['vnp_Bill_Address'] = $params['bill_address'];
-        }
-        if (!empty($params['bill_city'])) {
-            $inputData['vnp_Bill_City'] = $params['bill_city'];
-        }
-        if (!empty($params['bill_country'])) {
-            $inputData['vnp_Bill_Country'] = $params['bill_country'];
-        }
-
-        // Optional: Invoice info
-        if (!empty($params['inv_phone'])) {
-            $inputData['vnp_Inv_Phone'] = $params['inv_phone'];
-        }
-        if (!empty($params['inv_email'])) {
-            $inputData['vnp_Inv_Email'] = $params['inv_email'];
-        }
-        if (!empty($params['inv_customer'])) {
-            $inputData['vnp_Inv_Customer'] = $params['inv_customer'];
-        }
-        if (!empty($params['inv_address'])) {
-            $inputData['vnp_Inv_Address'] = $params['inv_address'];
-        }
-        if (!empty($params['inv_company'])) {
-            $inputData['vnp_Inv_Company'] = $params['inv_company'];
-        }
-        if (!empty($params['inv_taxcode'])) {
-            $inputData['vnp_Inv_Taxcode'] = $params['inv_taxcode'];
-        }
-        if (!empty($params['inv_type'])) {
-            $inputData['vnp_Inv_Type'] = $params['inv_type'];
+        foreach ($abstractedOptionalFields as $abstractedKey => $vnpKey) {
+            if (!empty($params[$abstractedKey])) {
+                $inputData[$vnpKey] = $params[$abstractedKey];
+            }
         }
 
         return $inputData;
     }
 
-    /**
-     * Remove Vietnamese accents
-     *
-     * @param string $str
-     * @return string
-     */
-    protected function removeAccents(string $str): string
-    {
-        $accents = [
-            'à', 'á', 'ả', 'ã', 'ạ', 'ă', 'ắ', 'ằ', 'ẳ', 'ẵ', 'ặ', 'â', 'ấ', 'ầ', 'ẩ', 'ẫ', 'ậ',
-            'è', 'é', 'ẻ', 'ẽ', 'ẹ', 'ê', 'ế', 'ề', 'ể', 'ễ', 'ệ',
-            'ì', 'í', 'ỉ', 'ĩ', 'ị',
-            'ò', 'ó', 'ỏ', 'õ', 'ọ', 'ô', 'ố', 'ồ', 'ổ', 'ỗ', 'ộ', 'ơ', 'ớ', 'ờ', 'ở', 'ỡ', 'ợ',
-            'ù', 'ú', 'ủ', 'ũ', 'ụ', 'ư', 'ứ', 'ừ', 'ử', 'ữ', 'ự',
-            'ỳ', 'ý', 'ỷ', 'ỹ', 'ỵ',
-            'đ',
-            'À', 'Á', 'Ả', 'Ã', 'Ạ', 'Ă', 'Ắ', 'Ằ', 'Ẳ', 'Ẵ', 'Ặ', 'Â', 'Ấ', 'Ầ', 'Ẩ', 'Ẫ', 'Ậ',
-            'È', 'É', 'Ẻ', 'Ẽ', 'Ẹ', 'Ê', 'Ế', 'Ề', 'Ể', 'Ễ', 'Ệ',
-            'Ì', 'Í', 'Ỉ', 'Ĩ', 'Ị',
-            'Ò', 'Ó', 'Ỏ', 'Õ', 'Ọ', 'Ô', 'Ố', 'Ồ', 'Ổ', 'Ỗ', 'Ộ', 'Ơ', 'Ớ', 'Ờ', 'Ở', 'Ỡ', 'Ợ',
-            'Ù', 'Ú', 'Ủ', 'Ũ', 'Ụ', 'Ư', 'Ứ', 'Ừ', 'Ử', 'Ữ', 'Ự',
-            'Ỳ', 'Ý', 'Ỷ', 'Ỹ', 'Ỵ',
-            'Đ'
-        ];
-
-        $noAccents = [
-            'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a', 'a',
-            'e', 'e', 'e', 'e', 'e', 'e', 'e', 'e', 'e', 'e', 'e',
-            'i', 'i', 'i', 'i', 'i',
-            'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o', 'o',
-            'u', 'u', 'u', 'u', 'u', 'u', 'u', 'u', 'u', 'u', 'u',
-            'y', 'y', 'y', 'y', 'y',
-            'd',
-            'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A', 'A',
-            'E', 'E', 'E', 'E', 'E', 'E', 'E', 'E', 'E', 'E', 'E',
-            'I', 'I', 'I', 'I', 'I',
-            'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O', 'O',
-            'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U', 'U',
-            'Y', 'Y', 'Y', 'Y', 'Y',
-            'D'
-        ];
-
-        return str_replace($accents, $noAccents, $str);
-    }
 }

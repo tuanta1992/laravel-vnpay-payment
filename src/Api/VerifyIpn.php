@@ -2,6 +2,9 @@
 
 namespace VNPayPayment\Api;
 
+use VNPayPayment\VNPayConstants;
+use VNPayPayment\Exceptions\VNPaySignatureException;
+
 class VerifyIpn extends BaseApi
 {
     /**
@@ -28,10 +31,12 @@ class VerifyIpn extends BaseApi
 
         // Nếu checksum không hợp lệ
         if (!$isValid) {
-            return [
-                'RspCode' => '97',
-                'Message' => 'Invalid signature',
-            ];
+            throw new VNPaySignatureException(
+                'Invalid signature from VNPay IPN',
+                $secureHash,
+                $vnpSecureHash,
+                ['txn_ref' => $params['vnp_TxnRef'] ?? '']
+            );
         }
 
         // Parse transaction info
@@ -57,7 +62,7 @@ class VerifyIpn extends BaseApi
             'transaction_status' => $transactionStatus,
             'transaction_no' => $transactionNo,
             'bank_code' => $bankCode,
-            'is_success' => $responseCode === '00' && $transactionStatus === '00',
+            'is_success' => $responseCode === VNPayConstants::RESPONSE_SUCCESS && $transactionStatus === VNPayConstants::TRANSACTION_STATUS_SUCCESS,
             'raw_data' => $params,
         ];
     }

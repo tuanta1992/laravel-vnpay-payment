@@ -2,9 +2,11 @@
 
 namespace VNPayPayment;
 
+use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 use VNPayPayment\Console\Commands\VNPayStatusCommand;
 use VNPayPayment\Console\Commands\VNPayTestCommand;
+use VNPayPayment\Http\Middleware\VerifyVNPayIpnIp;
 
 class VNPayServiceProvider extends ServiceProvider
 {
@@ -37,6 +39,10 @@ class VNPayServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Register middleware alias
+        $router = $this->app->make(Router::class);
+        $router->aliasMiddleware('vnpay.ipn', VerifyVNPayIpnIp::class);
+
         // Publish config
         if ($this->app->runningInConsole()) {
             $this->publishes([
@@ -49,9 +55,6 @@ class VNPayServiceProvider extends ServiceProvider
                 VNPayTestCommand::class,
             ]);
         }
-
-        // Load routes if exists
-        $this->loadRoutesFrom(__DIR__ . '/../routes/vnpay.php');
     }
 
     /**

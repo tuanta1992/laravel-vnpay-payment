@@ -2,6 +2,9 @@
 
 namespace VNPayPayment\Api;
 
+use VNPayPayment\VNPayConstants;
+use VNPayPayment\Exceptions\VNPaySignatureException;
+
 class VerifyReturnUrl extends BaseApi
 {
     /**
@@ -26,9 +29,19 @@ class VerifyReturnUrl extends BaseApi
         // Verify secure hash
         $isValid = $secureHash === $vnpSecureHash;
 
+        // Throw exception if signature invalid
+        if (!$isValid) {
+            throw new VNPaySignatureException(
+                'Invalid signature from VNPay return URL',
+                $secureHash,
+                $vnpSecureHash,
+                ['txn_ref' => $params['vnp_TxnRef'] ?? '']
+            );
+        }
+
         // Parse result
         return [
-            'is_valid' => $isValid,
+            'is_valid' => true,
             'txn_ref' => $params['vnp_TxnRef'] ?? '',
             'amount' => isset($params['vnp_Amount']) ? $this->parseAmount($params['vnp_Amount']) : 0,
             'order_info' => $params['vnp_OrderInfo'] ?? '',
@@ -39,9 +52,8 @@ class VerifyReturnUrl extends BaseApi
             'card_type' => $params['vnp_CardType'] ?? '',
             'pay_date' => isset($params['vnp_PayDate']) ? $this->parseDateTime($params['vnp_PayDate']) : null,
             'transaction_status' => $params['vnp_TransactionStatus'] ?? '',
-            'is_success' => $isValid &&
-                ($params['vnp_ResponseCode'] ?? '') === '00' &&
-                ($params['vnp_TransactionStatus'] ?? '') === '00',
+            'is_success' => ($params['vnp_ResponseCode'] ?? '') === VNPayConstants::RESPONSE_SUCCESS &&
+                ($params['vnp_TransactionStatus'] ?? '') === VNPayConstants::TRANSACTION_STATUS_SUCCESS,
             'message' => $this->getResponseMessage($params['vnp_ResponseCode'] ?? ''),
             'raw_data' => $params,
         ];
@@ -55,6 +67,7 @@ class VerifyReturnUrl extends BaseApi
      */
     protected function getResponseMessage(string $code): string
     {
-        return $this->config['response_codes'][$code] ?? 'Unknown error';
+        // First check config, then fall back to constants
+        return $this->config['response_codes'][$code] ?? VNPayConstants::getResponseMessage($code);
     }
 }

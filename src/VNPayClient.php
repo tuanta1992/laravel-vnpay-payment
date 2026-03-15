@@ -29,11 +29,7 @@ class VNPayClient
         $this->log('Creating payment URL', $params);
 
         $api = new CreatePayment($this->config);
-        $url = $api->execute($params);
-
-        $this->log('Payment URL created', ['url' => $url]);
-
-        return $url;
+        return $api->execute($params);
     }
 
     /**
@@ -62,11 +58,8 @@ class VNPayClient
      */
     public function verifyIpn(array $params): array
     {
-        $this->log('Verifying IPN', $params);
-
         $api = new VerifyIpn($this->config);
         $result = $api->execute($params);
-
         $this->log('IPN verified', $result);
 
         return $result;
@@ -139,7 +132,8 @@ class VNPayClient
      */
     public function getResponseMessage(string $code): ?string
     {
-        return $this->config['response_codes'][$code] ?? null;
+        // First check config, then fall back to constants
+        return $this->config['response_codes'][$code] ?? VNPayConstants::getResponseMessage($code);
     }
 
     /**
@@ -174,6 +168,90 @@ class VNPayClient
     }
 
     /**
+     * Kiểm tra IP có được phép gửi IPN không
+     *
+     * @param string $ip
+     * @return bool
+     */
+    public function isAllowedIpnIp(string $ip): bool
+    {
+        // Nếu không bật verify IP thì cho phép tất cả
+        if (!($this->config['ipn']['verify_ip'] ?? true)) {
+            return true;
+        }
+
+        $environment = $this->config['environment'] ?? 'sandbox';
+        $allowedIps = $this->config['ipn']['allowed_ips'][$environment] ?? [];
+
+        return in_array($ip, $allowedIps, true);
+    }
+
+    /**
+     * Lấy danh sách IP được phép theo môi trường hiện tại
+     *
+     * @return array
+     */
+    public function getAllowedIpnIps(): array
+    {
+        $environment = $this->config['environment'] ?? 'sandbox';
+        return $this->config['ipn']['allowed_ips'][$environment] ?? [];
+    }
+
+    /**
+     * Log khởi tạo payment (create payment URL)
+     *
+     * @param string $txnRef
+     * @param int $amount
+     * @param array $params
+     * @return void
+     */
+    public function logPaymentInit(string $txnRef, int $amount, array $params = []): void
+    {
+        $this->log('PAYMENT_INIT', [
+            'txn_ref' => $txnRef,
+            'amount' => $amount,
+            'ip' => request()->ip(),
+            'user_agent' => request()->userAgent(),
+            'params' => $params,
+            'timestamp' => now()->toIso8601String(),
+        ]);
+    }
+
+    /**
+     * Log IPN nhận được
+     *
+     * @param string $ip
+     * @param array $data
+     * @param bool $isAllowed
+     * @return void
+     */
+    public function logIpnReceived(string $ip, array $data, bool $isAllowed = true): void
+    {
+        $level = $isAllowed ? 'info' : 'warning';
+        $message = $isAllowed ? 'IPN_RECEIVED' : 'IPN_BLOCKED_IP';
+
+        $context = [
+            'ip' => $ip,
+            'is_allowed' => $isAllowed,
+            'txn_ref' => $data['vnp_TxnRef'] ?? null,
+            'response_code' => $data['vnp_ResponseCode'] ?? null,
+            'transaction_status' => $data['vnp_TransactionStatus'] ?? null,
+            'amount' => isset($data['vnp_Amount']) ? (int)$data['vnp_Amount'] / 100 : null,
+            'bank_code' => $data['vnp_BankCode'] ?? null,
+            'transaction_no' => $data['vnp_TransactionNo'] ?? null,
+            'pay_date' => $data['vnp_PayDate'] ?? null,
+            'timestamp' => now()->toIso8601String(),
+            'raw_data' => $data,
+        ];
+
+        if ($level === 'warning') {
+            $this->logWarning($message, $context);
+        } else {
+            $this->log($message, $context);
+        }
+    }
+
+    /**
      * Log thông tin
      *
      * @param string $message
@@ -186,6 +264,22 @@ class VNPayClient
             return;
         }
 
-        Log::channel($this->config['logging']['channel'] ?? 'stack')->info('[VNPay] ' . $message, $context);
+        Log::channel($this->config['logging']['channel'] ?? 'vnpay')->info('[VNPay] ' . $message, $context);
+    }
+
+    /**
+     * Log warning
+     *
+     * @param string $message
+     * @param array $context
+     * @return void
+     */
+    protected function logWarning(string $message, array $context = []): void
+    {
+        if (!($this->config['logging']['enabled'] ?? false)) {
+            return;
+        }
+
+        Log::channel($this->config['logging']['channel'] ?? 'vnpay')->warning('[VNPay] ' . $message, $context);
     }
 }

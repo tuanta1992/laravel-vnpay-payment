@@ -4,6 +4,9 @@ namespace VNPayPayment\Api;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
+use VNPayPayment\VNPayConstants;
+use VNPayPayment\Exceptions\VNPayValidationException;
+use VNPayPayment\Exceptions\VNPayRequestException;
 
 class QueryTransaction extends BaseApi
 {
@@ -12,7 +15,8 @@ class QueryTransaction extends BaseApi
      *
      * @param array $params
      * @return array
-     * @throws \Exception
+     * @throws VNPayValidationException
+     * @throws VNPayRequestException
      */
     public function execute(array $params): array
     {
@@ -40,7 +44,14 @@ class QueryTransaction extends BaseApi
             return $this->parseResponse($result);
 
         } catch (GuzzleException $e) {
-            throw new \Exception('Query transaction failed: ' . $e->getMessage());
+            throw new VNPayRequestException(
+                'Query transaction request failed: ' . $e->getMessage(),
+                url: $this->getUrl('api'),
+                method: 'POST',
+                attempts: 1,
+                context: ['txn_ref' => $requestData['vnp_TxnRef'] ?? ''],
+                previous: $e
+            );
         }
     }
 
@@ -52,24 +63,48 @@ class QueryTransaction extends BaseApi
      */
     protected function buildRequestData(array $params): array
     {
-        $requestId = $params['request_id'] ?? $this->generateTxnRef(32);
+        // Normalize dual-mode parameters: vnp_ prefix takes priority
+        $normalized = $this->normalizeParams($params, [
+            'vnp_TxnRef' => 'txn_ref',
+            'vnp_TransactionDate' => 'transaction_date',
+            'vnp_OrderInfo' => 'order_info',
+            'vnp_TransactionNo' => 'transaction_no',
+            'vnp_RequestId' => 'request_id',
+            'vnp_IpAddr' => 'ip_addr',
+        ]);
+
+        // Extract with defaults
+        $txnRef = $normalized['vnp_TxnRef'] ?? null;
+        $transactionDate = $normalized['vnp_TransactionDate'] ?? null;
+        $orderInfo = $normalized['vnp_OrderInfo'] ?? VNPayConstants::DEFAULT_QUERY_ORDER_INFO;
+        $transactionNo = $normalized['vnp_TransactionNo'] ?? null;
+        $requestId = $normalized['vnp_RequestId'] ?? $this->generateTxnRef(VNPayConstants::DEFAULT_REQUEST_ID_LENGTH);
+        $ipAddr = $normalized['vnp_IpAddr'] ?? $this->getIpAddress();
+
+        if (!$txnRef || !$transactionDate) {
+            throw new VNPayValidationException(
+                'txn_ref|transaction_date',
+                'Missing required parameters: txn_ref/vnp_TxnRef and transaction_date/vnp_TransactionDate'
+            );
+        }
+
         $createDate = $this->formatDateTime();
 
         $data = [
             'vnp_RequestId' => $requestId,
             'vnp_Version' => $this->config['version'],
-            'vnp_Command' => 'querydr',
+            'vnp_Command' => VNPayConstants::COMMAND_QUERY,
             'vnp_TmnCode' => $this->config['tmn_code'],
-            'vnp_TxnRef' => $params['txn_ref'],
-            'vnp_OrderInfo' => $params['order_info'] ?? 'Query transaction',
-            'vnp_TransactionDate' => $params['transaction_date'],
+            'vnp_TxnRef' => $txnRef,
+            'vnp_OrderInfo' => $this->removeAccents($orderInfo),
+            'vnp_TransactionDate' => $transactionDate,
             'vnp_CreateDate' => $createDate,
-            'vnp_IpAddr' => $params['ip_addr'] ?? $this->getIpAddress(),
+            'vnp_IpAddr' => $ipAddr,
         ];
 
         // Optional: transaction_no
-        if (!empty($params['transaction_no'])) {
-            $data['vnp_TransactionNo'] = $params['transaction_no'];
+        if (!empty($transactionNo)) {
+            $data['vnp_TransactionNo'] = $transactionNo;
         }
 
         // Create secure hash
@@ -90,6 +125,7 @@ class QueryTransaction extends BaseApi
 
         return $data;
     }
+
 
     /**
      * Parse response
@@ -116,7 +152,7 @@ class QueryTransaction extends BaseApi
             'transaction_status' => $result['vnp_TransactionStatus'] ?? '',
             'promotion_code' => $result['vnp_PromotionCode'] ?? '',
             'promotion_amount' => isset($result['vnp_PromotionAmount']) ? $this->parseAmount($result['vnp_PromotionAmount']) : 0,
-            'is_success' => ($result['vnp_ResponseCode'] ?? '') === '00',
+            'is_success' => ($result['vnp_ResponseCode'] ?? '') === VNPayConstants::RESPONSE_SUCCESS,
             'raw_data' => $result,
         ];
     }

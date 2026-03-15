@@ -26,7 +26,7 @@ return [
     | VNPay Environment
     |--------------------------------------------------------------------------
     |
-    | Môi trường: 'sandbox' hoặc 'production'
+    | Môi trường: 'sandbox' hoặc 'live'
     |
     */
     'environment' => env('VNPAY_ENVIRONMENT', 'sandbox'),
@@ -44,9 +44,9 @@ return [
             'payment' => 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html',
             'api' => 'https://sandbox.vnpayment.vn/merchant_webapi/api/transaction',
         ],
-        'production' => [
-            'payment' => 'https://vnpayment.vn/paymentv2/vpcpay.html',
-            'api' => 'https://vnpayment.vn/merchant_webapi/api/transaction',
+        'live' => [
+            'payment' => 'https://pay.vnpay.vn/vpcpay.html',
+            'api' => 'https://pay.vnpay.vn/merchant_webapi/api/transaction',
         ],
     ],
 
@@ -175,10 +175,45 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | IPN IP Whitelist
+    |--------------------------------------------------------------------------
+    |
+    | Danh sách IP của server VNPAY được phép gửi IPN
+    | Bật verify_ip để chỉ chấp nhận IPN từ các IP này
+    |
+    */
+    'ipn' => [
+        'verify_ip' => env('VNPAY_IPN_VERIFY_IP', true),
+        'allowed_ips' => [
+            'sandbox' => [
+                '113.160.92.202',
+                '202.93.156.34',
+                '203.205.17.226',
+                '103.220.84.4',
+            ],
+            'live' => [
+                '113.52.45.78',
+                '116.97.245.130',
+                '42.118.107.252',
+                '113.20.97.250',
+                '203.171.19.146',
+                '103.220.87.4',
+                '103.220.86.4',
+                '103.220.86.10',
+                '103.220.87.10',
+                '103.220.86.139',
+                '103.220.87.139',
+            ],
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Logging
     |--------------------------------------------------------------------------
     |
     | Bật/tắt logging và cấu hình log channel
+    | Log sẽ được lưu riêng để dễ dàng theo dõi giao dịch
     |
     */
     'logging' => [
